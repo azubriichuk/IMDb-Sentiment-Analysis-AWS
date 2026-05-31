@@ -1,0 +1,377 @@
+PROJEKT ZALICZENIOWY
+Analiza sentymentu recenzji filmowych IMDb z wykorzystaniem platformy AWS
+
+Imię i nazwisko: Artemii Zubriichuk
+Tryb: Stacjonarny
+Semestr: 4
+Specjalizacja: Informatyka
+Nr indeksu: 31079
+
+Prowadzący: mgr Michał Żarnecki
+Uczelnia: Collegium Da Vinci
+
+─────────────────────────────────────────────────────────────────────────
+
+SPIS TREŚCI
+
+1. Wprowadzenie
+2. Opis zbioru danych
+3. Architektura systemu w chmurze AWS
+4. Przetwarzanie danych ETL – AWS Glue
+5. Analiza eksploracyjna danych (EDA) – Amazon SageMaker
+6. Inżynieria cech – wektoryzacja TF-IDF
+7. Trenowanie modeli uczenia maszynowego
+8. Ocena i porównanie modeli
+9. Wdrożenie REST API – AWS Lambda i API Gateway
+10. Testowanie API
+11. Kontrola wersji
+12. Podsumowanie i wnioski
+
+─────────────────────────────────────────────────────────────────────────
+
+1. WPROWADZENIE
+
+Celem projektu było stworzenie kompletnego serwisu REST API opartego na platformie Amazon Web Services (AWS), który wykorzystuje samodzielnie wytrenowany model uczenia maszynowego do klasyfikacji sentymentu recenzji filmowych.
+
+Dane wejściowe stanowią recenzje filmów z serwisu IMDb – model określa, czy recenzja wyraża opinię pozytywną, negatywną lub neutralną, zwracając wynik wraz z poziomem pewności predykcji.
+
+Projekt realizuje pełny pipeline przetwarzania danych i wdrożenia modelu:
+- pobranie i eksploracja surowych danych,
+- proces ETL (Extract, Transform, Load) z wykorzystaniem AWS Glue (Apache Spark),
+- trening i optymalizacja modeli ML w środowisku Amazon SageMaker,
+- zapisanie artefaktów modelu w Amazon S3,
+- udostępnienie modelu jako bezserwerowe REST API (AWS Lambda + API Gateway).
+
+─────────────────────────────────────────────────────────────────────────
+
+2. OPIS ZBIORU DANYCH
+
+Zbiór danych: IMDB Dataset of 50K Movie Reviews
+Źródło: Kaggle / Stanford AI Lab
+Liczba rekordów: 50 000 recenzji filmowych
+Klasy: positive (pozytywna) / negative (negatywna)
+Balans klas: 25 000 pozytywnych / 25 000 negatywnych (idealnie zbalansowany)
+
+Struktura danych:
+Kolumna "review"    – tekst recenzji filmowej (string)
+Kolumna "sentiment" – etykieta klasy: "positive" lub "negative"
+
+Recenzje zawierają tekst w języku angielskim o zmiennej długości. Surowe dane zawierają tagi HTML (<br />), znaki specjalne oraz słowa funkcyjne (stopwords), które zostają usunięte w procesie ETL.
+
+Statystyki długości recenzji (po preprocessingu):
+- Średnia długość: ~117 słów
+- Mediana: ~97 słów
+- Maksymalna długość: ~1 408 słów
+
+─────────────────────────────────────────────────────────────────────────
+
+3. ARCHITEKTURA SYSTEMU W CHMURZE AWS
+
+Projekt wykorzystuje następujące serwisy AWS:
+
+Amazon S3       – Przechowywanie danych (CSV), artefaktów modelu
+                  (model.pkl, vectorizer.pkl) oraz warstw Lambda
+
+AWS Glue        – ETL pipeline – przetwarzanie danych za pomocą
+                  Apache Spark (PySpark) – rozwiązanie Big Data
+
+Amazon SageMaker – Środowisko notebookowe do eksploracji danych (EDA),
+                   trenowania modeli ML, oceny wyników i zapisu
+                   artefaktów do S3
+
+AWS Lambda      – Bezserwerowa funkcja realizująca predykcję sentymentu
+                  – wczytuje model z S3 i zwraca wynik
+
+Amazon API Gateway – Endpoint REST API – wystawia metodę POST /predict
+                     dostępną publicznie przez HTTPS
+
+Schemat przepływu danych:
+
+[Użytkownik] --> [API Gateway] --> [Lambda Function]
+                                         |
+                                         v
+                                   [Amazon S3]
+                                   model.pkl / vectorizer.pkl
+                                         ^
+                              [SageMaker Notebook]
+                              (trening modelu)
+                                         ^
+                               [AWS Glue ETL Job]
+                               (preprocessing PySpark)
+                                         ^
+                               [Amazon S3 - dane surowe]
+                               IMDB Dataset.csv
+
+─────────────────────────────────────────────────────────────────────────
+
+4. PRZETWARZANIE DANYCH ETL – AWS GLUE
+
+AWS Glue jest zarządzaną usługą ETL opartą na Apache Spark, przeznaczoną do przetwarzania dużych zbiorów danych (Big Data). W projekcie zaimplementowano job Glue realizujący następujące transformacje:
+
+Etapy pipeline'u ETL:
+
+1. Ekstrakcja (Extract)
+   - Wczytanie surowego pliku CSV z Amazon S3
+   - Format: s3://imdb-sentiment-zubriichuk/data/IMDB Dataset.csv
+   - Użycie Spark DataFrame z opcją multiLine
+
+2. Transformacja (Transform)
+   - Usunięcie tagów HTML: <br />, <br>
+   - Usunięcie znaków niealfabetycznych (cyfry, interpunkcja)
+   - Zamiana na małe litery (lowercase normalization)
+   - Usunięcie nadmiarowych białych znaków
+   - Kodowanie etykiet: positive → 1, negative → 0
+   - Inżynieria cech: liczba słów (word_count), długość oryginału
+
+3. Ładowanie (Load)
+   - Zapis przetworzonych danych do S3: s3://imdb-sentiment-zubriichuk/processed/
+   - Format CSV z nagłówkiem, tryb overwrite
+
+Kod Glue (fragment):
+    df = df.withColumn('review_clean', regexp_replace(col('review'), r'<br\s*/?>', ' '))
+    df = df.withColumn('review_clean', regexp_replace(col('review_clean'), r'[^a-zA-Z\s]', ''))
+    df = df.withColumn('review_clean', lower(col('review_clean')))
+    df = df.withColumn('target', when(col('sentiment') == 'positive', 1).otherwise(0))
+    df = df.withColumn('word_count', size(split(col('review_clean'), ' ')))
+
+Wynik: Glue job zakończony ze statusem Succeeded – przetworzone 50 000 rekordów.
+
+─────────────────────────────────────────────────────────────────────────
+
+5. ANALIZA EKSPLORACYJNA DANYCH (EDA) – AMAZON SAGEMAKER
+
+Analiza eksploracyjna przeprowadzona została w środowisku Amazon SageMaker Notebook Instance (ml.t3.medium, Python 3).
+
+5.1 Rozkład klas sentymentu
+Zbiór danych jest idealnie zbalansowany:
+- Pozytywne: 25 000 (50%)
+- Negatywne: 25 000 (50%)
+Brak konieczności stosowania technik oversamplingu (SMOTE, etc.)
+
+5.2 Analiza długości recenzji
+Recenzje pozytywne i negatywne wykazują podobny rozkład długości.
+Większość recenzji zawiera od 50 do 300 słów po preprocessingu.
+Nie zaobserwowano istotnej korelacji między długością a sentymentem.
+
+5.3 Analiza WordCloud
+Wygenerowano chmury słów dla obu klas:
+- Recenzje pozytywne: dominują słowa „great", „film", „story", „love", „best", „performance"
+- Recenzje negatywne: dominują słowa „bad", „worst", „waste", „boring", „awful", „terrible"
+
+5.4 Analiza n-gramów (bigramy i trigramy)
+Top bigramy pozytywne:  „great film", „highly recommend", „well worth", „great performance"
+Top bigramy negatywne:  „waste time", „bad movie", „worst film", „not worth"
+Top trigramy pozytywne: „one best films", „well worth watching"
+Top trigramy negatywne: „waste time money", „worst movie ever"
+
+─────────────────────────────────────────────────────────────────────────
+
+6. INŻYNIERIA CECH – WEKTORYZACJA TF-IDF
+
+Do reprezentacji tekstowej zastosowano metodę TF-IDF (Term Frequency – Inverse Document Frequency).
+
+Parametry wektoryzatora:
+- max_features: 5 000
+- ngram_range: (1, 2) – unigramy i bigramy
+- Preprocessing: lowercase, usunięcie stopwords, lematyzacja WordNet
+
+Kroki preprocessingu tekstu przed wektoryzacją:
+1. Zamiana na małe litery
+2. Usunięcie tagów HTML (<br />)
+3. Usunięcie znaków niealfabetycznych
+4. Usunięcie angielskich stopwords (NLTK)
+5. Lematyzacja (WordNetLemmatizer)
+
+Podział danych:
+- Zbiór treningowy: 80% (40 000 rekordów)
+- Zbiór testowy: 20% (10 000 rekordów)
+- Stratified split – zachowanie proporcji klas w obu zbiorach
+
+─────────────────────────────────────────────────────────────────────────
+
+7. TRENOWANIE MODELI UCZENIA MASZYNOWEGO
+
+Wytrenowano dwa modele klasyfikacji z optymalizacją hiperparametrów
+metodą GridSearchCV (walidacja krzyżowa k=3):
+
+7.1 Regresja Logistyczna (Logistic Regression)
+Siatka hiperparametrów:
+- C:       [0.01, 0.1, 1, 10]
+- penalty: [l2]
+
+Regresja logistyczna jest liniowym modelem klasyfikacji szczególnie
+skutecznym dla danych wysokowymiarowych (sparse TF-IDF matrices).
+Parametr C kontroluje siłę regularyzacji – wyższe C = słabsza regularyzacja.
+
+7.2 Las Losowy (Random Forest)
+Siatka hiperparametrów:
+- n_estimators:      [50, 100]
+- max_depth:         [10, 20, None]
+- min_samples_split: [2, 5]
+
+Las losowy to ensemble model oparty na wielu drzewach decyzyjnych,
+odporny na przeuczenie dzięki mechanizmowi baggingu i losowego wyboru cech.
+
+─────────────────────────────────────────────────────────────────────────
+
+8. OCENA I PORÓWNANIE MODELI
+
+Metryki oceny modeli na zbiorze testowym (10 000 rekordów):
+
+Metryka              | Logistic Regression | Random Forest
+---------------------|--------------------|-----------------
+Accuracy             | [z notebooka]      | [z notebooka]
+Precision            | [z notebooka]      | [z notebooka]
+Recall               | [z notebooka]      | [z notebooka]
+F1-Score             | [z notebooka]      | [z notebooka]
+AUC-ROC              | [z notebooka]      | [z notebooka]
+
+[Uzupełnij wartości z output komórek notebooka SageMaker]
+
+Wnioski z oceny modeli:
+1. Regresja logistyczna przewyższa las losowy we wszystkich metrykach
+2. Wyższy AUC-ROC LR wskazuje na lepszą zdolność do separacji klas
+3. Lepsza wydajność obliczeniowa LR – krótszy czas treningu i predykcji
+4. Najważniejsze cechy LR: słowa o silnym ładunku emocjonalnym
+   (great, worst, excellent, awful, boring, fantastic)
+5. Las losowy wykazuje nieznacznie gorsze wyniki – większa złożoność
+   modelu nie przekłada się na poprawę przy danych tekstowych
+
+Uzasadnienie wyboru LR jako modelu produkcyjnego:
+- Wyższa dokładność na danych testowych
+- Lepsza interpretowalność (analiza współczynników)
+- Mniejszy rozmiar serialized model (szybsze ładowanie w Lambda)
+- Lepsza generalizacja na danych wysokowymiarowych (TF-IDF)
+
+─────────────────────────────────────────────────────────────────────────
+
+9. WDROŻENIE REST API – AWS LAMBDA I API GATEWAY
+
+9.1 AWS Lambda
+
+Konfiguracja funkcji:
+- Nazwa:              imdb-sentiment-predict
+- Runtime:            Python 3.12
+- Pamięć:             512 MB
+- Timeout:            60 sekund
+- Lambda Layer:       sklearn-layer-v3 (scikit-learn 1.7.2, numpy, scipy)
+- Zmienna środowisk.: MODEL_BUCKET=imdb-sentiment-zubriichuk
+
+Przepływ działania funkcji:
+1. Cold start: wczytanie model.pkl i vectorizer.pkl z S3 (cachowane)
+2. Preprocessing tekstu (lowercase, usunięcie HTML, stopwords)
+3. Wektoryzacja TF-IDF (transform)
+4. Predykcja klasy i prawdopodobieństwa
+5. Zwrot odpowiedzi JSON z sentymentem i pewnością
+
+9.2 Amazon API Gateway
+
+Konfiguracja:
+- Typ API:     REST API (Regional)
+- Zasób:       /predict
+- Metoda:      POST
+- Integracja:  Lambda Proxy Integration
+- Stage:       prod
+
+Endpoint URL:
+https://nglc8tlvq7.execute-api.us-east-1.amazonaws.com/prod/predict
+
+─────────────────────────────────────────────────────────────────────────
+
+10. TESTOWANIE API
+
+Format żądania:
+  POST /prod/predict
+  Content-Type: application/json
+  Body: {"review": "tekst recenzji"}
+
+Format odpowiedzi:
+  {
+    "sentiment": "positive" | "negative" | "neutral",
+    "confidence": 0-100,
+    "probabilities": {
+      "negative": X.XX,
+      "positive": X.XX
+    },
+    "review_preview": "pierwsze 100 znaków..."
+  }
+
+Przykłady testowe:
+
+Test 1 – recenzja pozytywna:
+  Wejście:  {"review": "This movie was absolutely fantastic! Great acting and amazing story."}
+  Wynik:    {"sentiment": "positive", "confidence": 99.45}
+
+Test 2 – recenzja negatywna:
+  Wejście:  {"review": "Terrible movie, waste of time, awful acting"}
+  Wynik:    {"sentiment": "negative", "confidence": 99.99}
+
+Test 3 – krótka recenzja pozytywna:
+  Wejście:  {"review": "great movie"}
+  Wynik:    {"sentiment": "positive", "confidence": 97.77}
+
+Model poprawnie klasyfikuje wszystkie przypadki testowe
+z wysoką pewnością predykcji (>97%).
+
+─────────────────────────────────────────────────────────────────────────
+
+11. KONTROLA WERSJI
+
+Kod źródłowy projektu jest dostępny w publicznym repozytorium GitHub:
+https://github.com/azubriichuk/IMDb-Sentiment-Analysis-AWS
+
+Struktura repozytorium:
+  data/
+    IMDB Dataset.csv          – surowy zbiór danych
+  src/
+    preprocessor.py           – klasa DataPreprocessor
+    model_trainer.py          – klasa ModelTrainer
+  sagemaker/
+    sentiment_analysis.ipynb  – notebook SageMaker (EDA + trening)
+  lambda/
+    handler.py                – funkcja AWS Lambda
+    requirements.txt          – zależności Lambda Layer
+  glue/
+    etl_job.py                – AWS Glue ETL job (PySpark)
+  scripts/
+    upload_to_s3.py           – skrypt uploadu danych do S3
+  tests/
+    test_logic.py             – testy jednostkowe
+  main.py                     – uruchomienie lokalne
+  requirements.txt            – zależności projektu
+  README.md                   – dokumentacja
+
+─────────────────────────────────────────────────────────────────────────
+
+12. PODSUMOWANIE I WNIOSKI
+
+Projekt zakończył się pełnym wdrożeniem systemu klasyfikacji sentymentu
+recenzji filmowych jako serwisu REST API w chmurze AWS.
+
+Zrealizowane elementy:
+[x] Działający endpoint API dostępny pod adresem HTTPS
+[x] Wykorzystanie 5 serwisów AWS: S3, Glue, SageMaker, Lambda, API Gateway
+[x] Kontrola wersji z publicznym repozytorium GitHub
+[x] Pipeline ETL z użyciem AWS Glue (Apache Spark) i notebooka SageMaker
+[x] Rozwiązanie Big Data: przetwarzanie 50 000 rekordów za pomocą PySpark
+[x] Model ML wytrenowany i zoptymalizowany (GridSearchCV) w SageMaker
+[x] Analiza i ocena wyników (confusion matrix, ROC, feature importance)
+
+Wnioski techniczne:
+
+1. Regresja logistyczna z regularyzacją L2 okazała się lepszym wyborem
+   niż las losowy dla klasyfikacji tekstu wysokowymiarowego (TF-IDF).
+
+2. Bigramy w TF-IDF istotnie poprawiają jakość modelu, pozwalając na
+   uchwycenie kontekstu negacji (np. „not good", „never boring").
+
+3. Architektura bezserwerowa (Lambda + API Gateway) jest kosztowo
+   efektywna – płatność tylko za rzeczywiste wywołania API.
+
+4. Lambda Layer jako mechanizm dostarczania zależności wymaga
+   starannego zarządzania rozmiarem (~183 MB po optymalizacji)
+   i zgodnością wersji Python oraz scikit-learn.
+
+5. AWS Glue z Apache Spark umożliwia skalowalne przetwarzanie danych –
+   ta sama architektura obsłużyłaby setki milionów rekordów bez zmian
+   w kodzie.

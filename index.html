@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IMDb Sentiment Analyzer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    header h1 {
+      font-size: 2.2rem;
+      color: #f5c518;
+      letter-spacing: 1px;
+    }
+
+    header p {
+      color: #888;
+      margin-top: 8px;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 680px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.9rem;
+      color: #aaa;
+      margin-bottom: 10px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 160px;
+      background: #0f0f1a;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      color: #e0e0e0;
+      font-size: 1rem;
+      padding: 14px;
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+
+    textarea:focus { border-color: #f5c518; }
+
+    button {
+      margin-top: 16px;
+      width: 100%;
+      padding: 14px;
+      background: #f5c518;
+      color: #0f0f1a;
+      font-size: 1rem;
+      font-weight: 700;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      letter-spacing: 0.5px;
+    }
+
+    button:hover { opacity: 0.9; }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .result {
+      margin-top: 28px;
+      border-radius: 12px;
+      padding: 24px;
+      display: none;
+      animation: fadeIn 0.4s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .result.positive { background: #0d2b1a; border: 1px solid #2d6a3f; }
+    .result.negative { background: #2b0d0d; border: 1px solid #6a2d2d; }
+    .result.neutral  { background: #1a1a2e; border: 1px solid #3a3a5a; }
+
+    .result-top {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .emoji { font-size: 2.5rem; }
+
+    .sentiment-label {
+      font-size: 1.6rem;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+
+    .positive .sentiment-label { color: #4caf82; }
+    .negative .sentiment-label { color: #e57373; }
+    .neutral  .sentiment-label { color: #90a4ae; }
+
+    .confidence-text {
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-top: 4px;
+    }
+
+    .bars { display: flex; flex-direction: column; gap: 10px; }
+
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.85rem;
+    }
+
+    .bar-label { width: 68px; color: #aaa; text-align: right; }
+
+    .bar-track {
+      flex: 1;
+      background: #0f0f1a;
+      border-radius: 6px;
+      height: 10px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      transition: width 0.6s ease;
+    }
+
+    .bar-fill.pos { background: #4caf82; }
+    .bar-fill.neg { background: #e57373; }
+
+    .bar-value { width: 44px; color: #ccc; font-weight: 600; }
+
+    .preview {
+      margin-top: 16px;
+      font-size: 0.82rem;
+      color: #666;
+      font-style: italic;
+      border-top: 1px solid #2a2a3a;
+      padding-top: 12px;
+    }
+
+    .error-box {
+      margin-top: 20px;
+      padding: 14px 18px;
+      background: #2b0d0d;
+      border: 1px solid #6a2d2d;
+      border-radius: 10px;
+      color: #e57373;
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 3px solid #0f0f1a;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer {
+      margin-top: 36px;
+      font-size: 0.78rem;
+      color: #444;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>IMDb Sentiment Analyzer</h1>
+    <p>Powered by AWS Lambda + API Gateway &nbsp;|&nbsp; Random Forest model</p>
+  </header>
+
+  <div class="card">
+    <label for="reviewInput">Enter a movie review:</label>
+    <textarea id="reviewInput" placeholder="e.g. This movie was absolutely fantastic! The acting was superb and the story kept me on the edge of my seat the whole time."></textarea>
+
+    <button id="analyzeBtn" onclick="analyze()">Analyze Sentiment</button>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="result" id="resultBox">
+      <div class="result-top">
+        <div class="emoji" id="emoji"></div>
+        <div>
+          <div class="sentiment-label" id="sentimentLabel"></div>
+          <div class="confidence-text" id="confidenceText"></div>
+        </div>
+      </div>
+
+      <div class="bars">
+        <div class="bar-row">
+          <div class="bar-label">Positive</div>
+          <div class="bar-track"><div class="bar-fill pos" id="barPos" style="width:0%"></div></div>
+          <div class="bar-value" id="valPos"></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">Negative</div>
+          <div class="bar-track"><div class="bar-fill neg" id="barNeg" style="width:0%"></div></div>
+          <div class="bar-value" id="valNeg"></div>
+        </div>
+      </div>
+
+      <div class="preview" id="previewText"></div>
+    </div>
+  </div>
+
+  <footer>IMDb Sentimental Analysis &copy; 2026</footer>
+
+  <script>
+    const API_URL = 'https://nglc8tlvq7.execute-api.us-east-1.amazonaws.com/prod/predict';
+
+    async function analyze() {
+      const review = document.getElementById('reviewInput').value.trim();
+      const btn = document.getElementById('analyzeBtn');
+      const resultBox = document.getElementById('resultBox');
+      const errorBox = document.getElementById('errorBox');
+
+      errorBox.style.display = 'none';
+      resultBox.style.display = 'none';
+
+      if (!review) {
+        showError('Please enter a review before analyzing.');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Analyzing...';
+
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ review })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          showError(data.error || `Server error: ${res.status}`);
+          return;
+        }
+
+        showResult(data);
+      } catch (err) {
+        showError('Could not reach the API. Check your internet connection.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Analyze Sentiment';
+      }
+    }
+
+    function showResult(data) {
+      const sentiment = data.sentiment;
+      const pos = data.probabilities.positive;
+      const neg = data.probabilities.negative;
+
+      const resultBox = document.getElementById('resultBox');
+      resultBox.className = 'result ' + sentiment;
+
+      const emojis = { positive: '😊', negative: '😞', neutral: '😐' };
+      document.getElementById('emoji').textContent = emojis[sentiment] || '🤔';
+      document.getElementById('sentimentLabel').textContent = sentiment;
+      document.getElementById('confidenceText').textContent =
+        `Confidence: ${data.confidence}%`;
+
+      setTimeout(() => {
+        document.getElementById('barPos').style.width = pos + '%';
+        document.getElementById('barNeg').style.width = neg + '%';
+      }, 50);
+
+      document.getElementById('valPos').textContent = pos + '%';
+      document.getElementById('valNeg').textContent = neg + '%';
+      document.getElementById('previewText').textContent =
+        '"' + data.review_preview + '"';
+
+      resultBox.style.display = 'block';
+    }
+
+    function showError(msg) {
+      const errorBox = document.getElementById('errorBox');
+      errorBox.textContent = msg;
+      errorBox.style.display = 'block';
+    }
+
+    document.getElementById('reviewInput').addEventListener('keydown', function(e) {
+      if (e.ctrlKey && e.key === 'Enter') analyze();
+    });
+  </script>
+
+</body>
+</html>
